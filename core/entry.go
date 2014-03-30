@@ -51,74 +51,47 @@ type Entry struct {
     mutex sync.RWMutex
 }
 
-// The decryptGrants function decrypts an encrypted JSON grants string and populates the provided list with Grant objects based on the resulting JSON.
-// The entry mutex must be locked for reading prior to calling this method.
-func decryptGrants(encryptedGrants string, key []byte) ([]Grant, error) {
+// The canDo function determines if the provided encrypted grants string authorizes the user to perform some arbitrary action which
+// is determined by the calling context.  The entry mutex must be locked for reading prior to calling this method.
+func (e *Entry) canDo(encryptedGrants string, user string, key []byte) bool {
     data, err = Decrypt(encryptedGrants, key)
     if err != nil {
-        return nil, err
+        return false
     }
 
     var grantJson interface{}
     err := json.Unmarshal(data, &grantJson)
     if err != nil {
-        return nil, err
+        return false
     }
 
     var grants []Grant
     for _, g := range grantJson.([]interface{}) {
         item = g.(map[string]interface{})
-        append(grants, NewPreSignedGrant(item["user"].(string), item["signer"].(string), item["signature"].(string)))
+        grant = NewPreSignedGrant(item["user"].(string), item["signer"].(string), item["signature"].(string))
+        if g.For(user) {
+            return true
+        }
     }
-    return grants, nil
+    return false
 }
 
-// The canRead function determines if the given user has read access to the entry.  This function may decrypt the read grants field.
+// The canRead function determines if the given user has read access to the entry.
 // The entry mutex must be locked for reading prior to calling this method.
 func (e *Entry) canRead(user string, key []byte) bool {
-    grants, err := decryptGrants(e.read, key)
-    if err != nil {
-        return false
-    }
-
-    for _, g := range grants {
-        if g.For(user) {
-            return g.Verify()
-        }
-    }
-    return true
+    return e.canDo(e.read, user, key)
 }
 
-// The canWrite function determines if the given user has write access to the entry.  This function may decrypt the write grants field.
+// The canWrite function determines if the given user has write access to the entry.
 // The entry mutex must be locked for reading prior to calling this method.
 func (e *Entry) canWrite(user string, key []byte) bool {
-    grants, err := decryptGrants(e.write, key)
-    if err != nil {
-        return false
-    }
-
-    for _, g := range grants {
-        if g.For(user) {
-            return g.Verify()
-        }
-    }
-    return true
+    return e.canDo(e.write, user, key)
 }
 
 // The canDelegate function determines if the given user has delegation permissions on the entry.
 // The entry mutex must be locked for reading prior to calling this method.
 func (e *Entry) canDelegate(user string, key []byte) bool {
-    grants, err := decryptGrants(e.delegate, key)
-    if err != nil {
-        return false
-    }
-
-    for _, g := range grants {
-        if g.For(user) {
-            return g.Verify()
-        }
-    }
-    return true
+    return e.canDo(e.delegate, user, key)
 }
 
 // ReadGroup reads the group field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -131,11 +104,11 @@ func (e *Entry) ReadGroup(user string, key []byte) (string, error) {
     if e.canRead(user) || e.canWrite(user) || e.canDelegate(user) {
         data, err = Decrypt(e.group, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
         return string(data), nil
     }
-    return nil, &Error{ErrPermission, "group read permission denied"}
+    return nil, &Error{ErrPermission, user, "group read permission denied"}
 }
 
 // ReadIcon reads the icon field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -148,17 +121,17 @@ func (e *Entry) ReadIcon(user string, key []byte) (image.Image, error) {
     if e.canRead(user) || e.canWrite(user) || e.canDelegate(user) {
         data, err = Decrypt(e.icon, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
 
         r = bytes.NewReader(data)
         img, _, err = png.Decode(r)
         if err != nil {
-            return nil, err
+            return nil, &Error{ErrOther, user, err.Error()}
         }
         return img, nil
     }
-    return nil, &Error{ErrPermission, "icon read permission denied"}
+    return nil, &Error{ErrPermission, user, "icon read permission denied"}
 }
 
 // ReadTitle reads the title field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -171,11 +144,11 @@ func (e *Entry) ReadTitle(user string, key []byte) (string, error) {
     if e.canRead(user) || e.canWrite(user) || e.canDelegate(user) {
         data, err = Decrypt(e.title, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
         return string(data), nil
     }
-    return nil, &Error{ErrPermission, "title read permission denied"}
+    return nil, &Error{ErrPermission, user, "title read permission denied"}
 }
 
 // ReadUsername reads the username field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -186,11 +159,11 @@ func (e *Entry) ReadUsername(user string, key []byte) (string, error) {
     if e.canRead(user) {
         data, err = Decrypt(e.username, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
         return string(data), nil
     }
-    return nil, &Error{ErrPermission, "username read permission denied"}
+    return nil, &Error{ErrPermission, user, "username read permission denied"}
 }
 
 // ReadPassword reads the password field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -201,11 +174,11 @@ func (e *Entry) ReadPassword(user string, key []byte) (string, error) {
     if e.canRead(user) {
         data, err = Decrypt(e.password, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
         return string(data), nil
     }
-    return nil, &Error{ErrPermission, "password read permission denied"}
+    return nil, &Error{ErrPermission, user, "password read permission denied"}
 }
 
 // ReadUrl reads the password field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -216,11 +189,11 @@ func (e *Entry) ReadUrl(user string, key []byte) (string, error) {
     if e.canRead(user) {
         data, err = Decrypt(e.url, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
         return string(data), nil
     }
-    return nil, &Error{ErrPermission, "URL read permission denied"}
+    return nil, &Error{ErrPermission, user, "URL read permission denied"}
 }
 
 // ReadComment reads the comment field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -231,11 +204,11 @@ func (e *Entry) ReadComment(user string, key []byte) (string, error) {
     if e.canRead(user) {
         data, err = Decrypt(e.comment, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
         return string(data), nil
     }
-    return nil, &Error{ErrPermission, "comment read permission denied"}
+    return nil, &Error{ErrPermission, user, "comment read permission denied"}
 }
 
 // ReadExpiry reads the expiry date field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -246,16 +219,16 @@ func (e *Entry) ReadExpiry(user string, key []byte) (time.Time, error) {
     if e.canRead(user) {
         data, err = Decrypt(e.expiry, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
 
         t, err = time.Parse(time.RFC3339, data.(string))
         if err != nil {
-            return nil, err
+            return nil, &Error{ErrOther, user, err.Error()}
         }
         return t, nil
     }
-    return nil, &Error{ErrPermission, "expiry date read permission denied"}
+    return nil, &Error{ErrPermission, user, "expiry date read permission denied"}
 }
 
 // ReadExtras reads the extras field of the entry, provided that the user has appropriate permissions and a valid decryption key.
@@ -266,17 +239,17 @@ func (e *Entry) ReadExtras(user string, key []byte) (map[string]interface{}, err
     if e.canRead(user) {
         data, err = Decrypt(e.extras, key)
         if err != nil {
-            return nil, err
+            return nil, err.SetUser(user)
         }
 
         var extras interface{}
         err := json.Unmarshal(data, &extras)
         if err != nil {
-            return nil, err
+            return nil, &Error{ErrOther, user, err.Error()}
         }
         return extras, nil
     }
-    return nil, &Error{ErrPermission, "comment read permission denied"}
+    return nil, &Error{ErrPermission, user, "comment read permission denied"}
 }
 
 // ReadUserdata reads the userdata field of the entry, provided that the user has a valid decryption key.
@@ -287,13 +260,13 @@ func (e *Entry) ReadUserdata(user string, key []byte) (map[string]interface{}, e
 
     data, err = Decrypt(e.userdata, key)
     if err != nil {
-        return nil, err
+        return nil, err.SetUser(user)
     }
 
     var userdata interface{}
     err := json.Unmarshal(data, &userdata)
     if err != nil {
-        return nil, err
+        return nil, &Error{ErrOther, user, err.Error()}
     }
     return userdata, nil
 }
@@ -306,7 +279,7 @@ func (e *Entry) WriteGroup(user string, key []byte, group string) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(name), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.group = data
         if !Contains(e.modified, "group") {
@@ -314,7 +287,7 @@ func (e *Entry) WriteGroup(user string, key []byte, group string) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "group write permission denied"}
+    return &Error{ErrPermission, user, "group write permission denied"}
 }
 
 // WriteIcon writes the icon field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -326,12 +299,12 @@ func (e *Entry) WriteIcon(user string, key []byte, icon image.Image) error {
         var w bytes.Buffer
         err = png.Encode(w, icon)
         if err != nil {
-            return err
+            return &Error{ErrOther, user, err.Error()}
         }
 
         data, err = Encrypt(w.Bytes(), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.icon = data
         if !Contains(e.modified, "icon") {
@@ -339,7 +312,7 @@ func (e *Entry) WriteIcon(user string, key []byte, icon image.Image) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "icon write permission denied"}
+    return &Error{ErrPermission, user, "icon write permission denied"}
 }
 
 // WriteTitle writes the title field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -350,7 +323,7 @@ func (e *Entry) WriteTitle(user string, key []byte, title string) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(title), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.title = data
         if !Contains(e.modified, "title") {
@@ -358,7 +331,7 @@ func (e *Entry) WriteTitle(user string, key []byte, title string) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "title write permission denied"}
+    return &Error{ErrPermission, user, "title write permission denied"}
 }
 
 // WriteUsername writes the username field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -369,7 +342,7 @@ func (e *Entry) WriteUsername(user string, key []byte, username string) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(username), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.username = data
         if !Contains(e.modified, "username") {
@@ -377,7 +350,7 @@ func (e *Entry) WriteUsername(user string, key []byte, username string) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "username write permission denied"}
+    return &Error{ErrPermission, user, "username write permission denied"}
 }
 
 // WritePassword writes the password field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -388,7 +361,7 @@ func (e *Entry) WritePassword(user string, key []byte, password string) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(password), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.password = data
         if !Contains(e.modified, "password") {
@@ -396,7 +369,7 @@ func (e *Entry) WritePassword(user string, key []byte, password string) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "password write permission denied"}
+    return &Error{ErrPermission, user, "password write permission denied"}
 }
 
 // WriteUrl writes the url field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -407,7 +380,7 @@ func (e *Entry) WriteUrl(user string, key []byte, url string) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(url), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.url = data
         if !Contains(e.modified, "url") {
@@ -415,7 +388,7 @@ func (e *Entry) WriteUrl(user string, key []byte, url string) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "url write permission denied"}
+    return &Error{ErrPermission, user, "url write permission denied"}
 }
 
 // WriteComment writes the comment field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -426,7 +399,7 @@ func (e *Entry) WriteComment(user string, key []byte, comment string) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(comment), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.comment = data
         if !Contains(e.modified, "comment") {
@@ -434,7 +407,7 @@ func (e *Entry) WriteComment(user string, key []byte, comment string) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "comment write permission denied"}
+    return &Error{ErrPermission, user, "comment write permission denied"}
 }
 
 // WriteExpiry writes the expiry field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -445,7 +418,7 @@ func (e *Entry) WriteExpiry(user string, key []byte, expiry time.Time) error {
     if e.canWrite(user) {
         data, err = Encrypt([]byte(expiry.Format(time.RFC3339)), key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.expiry = data
         if !Contains(e.modified, "expiry") {
@@ -453,7 +426,7 @@ func (e *Entry) WriteExpiry(user string, key []byte, expiry time.Time) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "expiry date write permission denied"}
+    return &Error{ErrPermission, user, "expiry date write permission denied"}
 }
 
 // WriteExtras writes the extras field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -464,12 +437,12 @@ func (e *Entry) WriteExtras(user string, key []byte, extras interface{}) error {
     if e.canWrite(user) {
         bytes, err := json.Marshal(extras)
         if err != nil {
-            return err
+            return &Error{ErrOther, user, err.Error()}
         }
 
         data, err = Encrypt(bytes, key)
         if err != nil {
-            return err
+            return err.SetUser(user)
         }
         e.extras = data
         if !Contains(e.modified, "extras") {
@@ -477,7 +450,7 @@ func (e *Entry) WriteExtras(user string, key []byte, extras interface{}) error {
         }
         return nil
     }
-    return &Error{ErrPermission, "extras write permission denied"}
+    return &Error{ErrPermission, user, "extras write permission denied"}
 }
 
 // WriteUserdata writes the userdata field of the entry, provided that the user a valid encryption key.
@@ -487,12 +460,12 @@ func (e *Entry) WriteUserdata(user string, key []byte, userdata interface{}) err
 
     bytes, err := json.Marshal(userdata)
     if err != nil {
-        return err
+        return &Error{ErrOther, user, err.Error()}
     }
 
     data, err = Encrypt(bytes, key)
     if err != nil {
-        return err
+        return err.SetUser(user)
     }
     e.userdata = data
     if !Contains(e.modified, "userdata") {
