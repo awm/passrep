@@ -10,3 +10,11 @@ func Contains(slice []string, value string) bool {
     }
     return false
 }
+
+// AppendUnique only appends the string item if it is not already in the slice of strings.
+func AppendUnique(slice []string, value string) []string {
+    if !Contains(slice, value) {
+        return append(slice, value)
+    }
+    return slice
+}
