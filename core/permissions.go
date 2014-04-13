@@ -2,6 +2,8 @@ package core
 
 // Grant instances represent the grant of a particular permission by one user to another.
 type Grant struct {
+    // The ID field is the ID of entry that this grant is for.
+    Id  string
     // The user field is the user to which the permission has been granted.
     User string
     // The signer field is the user that is granting the permission.
@@ -11,24 +13,20 @@ type Grant struct {
 }
 
 // NewGrant creates a new Grant instance and calculates the signature field.
-func NewGrant(user string, signer string, signerkey []byte) *Grant {
-    data = user + signer
-    signature = Sign([]byte(data), signerkey)
-    return &Grant{user, signer, signature}
-}
-
-// NewPreSignedGrant creates a new Grant instance using a previously calculated signature.
-func NewPreSignedGrant(user string, signer string, signature string) *Grant {
-    return &Grant{user, signer, signature}
+func NewGrant(id string, user string, signer string, signerkey []byte) *Grant {
+    data := id + user + signer
+    signature := Sign([]byte(data), signerkey)
+    return &Grant{id, user, signer, signature}
 }
 
 // For determines if the grant is for the given user.
-func (g *Grant) For(user string) bool {
-    return (user == g.User && g.Verify())
+func (this *Grant) For(id string, user string) bool {
+    return (id == this.Id && user == this.User && this.Verify())
 }
 
 // Verify checks that the signature in the grant is valid for the user and signer.
-func (g *Grant) Verify() bool {
-    pubkey = GetUserPubkey(g.Signer)
-    return Verify(g.Signature, pubkey)
+func (this *Grant) Verify() bool {
+    pubkey := GetUserPubkey(this.Signer)
+    data := this.Id + this.User + this.Signer
+    return Verify([]byte(data), this.Signature, pubkey)
 }

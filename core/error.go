@@ -40,12 +40,18 @@ type Error struct {
 }
 
 // Error produces a string describing the error from the code and message.
-func (e *Error) Error() string {
-    return fmt.Sprintf("%s error for %s: %s", codeDesc[e.Code], e.User, e.Msg)
+func (this *Error) Error() string {
+    return fmt.Sprintf("%s error for %s: %s", codeDesc[this.Code], this.User, this.Msg)
 }
 
 // SetUser changes the user field after creation.
-func (e *Error) SetUser(user string) *Error {
-    e.User = user
-    return e
+func (this *Error) SetUser(user string) *Error {
+    this.User = user
+    return this
+}
+
+// SetCode changes the code field after creation.
+func (this *Error) SetCode(code ErrorCode) *Error {
+    this.Code = code
+    return this
 }
