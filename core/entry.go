@@ -1,454 +1,356 @@
 package core
 
 import (
-    "bytes"
     "encoding/json"
-    "github.com/awm/passrep/utils"
-    "image"
-    "image/png"
-    "sync"
     "time"
 )
 
-// Entry instances represent one user's view of a password database entry.
+// EntryView instances represent one user's view of a password database entry.
 // Most fields are kept encrypted until they need to be accessed.
-type Entry struct {
-    // The id string is the unique identifier for the entry, and ties together the individual views into the entry of each user.
-    id  string
-    // The modified field tracks which user-editable fields in the entry have been changed since the last commit.
-    modified []string
+type EntryView struct {
+    // The Id is the database row identifier.
+    Id  int64
+    // CreatedAt is the time when the entry was created.
+    CreatedAt time.Time
+    // UpdatedAt is the time when the entry was last updated.
+    UpdatedAt time.Time
 
-    // The read field contains the encrypted JSON string identifying the read access grants to the entry.
-    read string
-    // The write field contains the encrypted JSON string identifying the write access grants to the entry.
-    write string
-    // The delegate field contains the encrypted JSON string identifying the delegation access grants to the entry.
-    delegate string
+    // The EntryId string is the unique identifier for the password entry, and ties together the individual views into the entry of each user.
+    EntryId string
 
-    // The group field is the encrypted name of the group to which the entry belongs.
-    group string
-    // The icon filed is the encrypted image data of the entry.
-    icon string
-    // The title field is the encrypted title of the entry.
-    title string
+    // UserId is the foreign key of the owning user's database entry.
+    UserId int64
+    // The user field is the pointer to the owning user's object.
+    user *User
 
-    // The username field is the encrypted username stored in the entry.
-    username string
-    // The password field is the encrypted password stored in the entry.
-    password string
-    // The url field is the encrypted url stored in the entry.
-    url string
-    // The comment field is the encrypted comment stored in the entry.
-    comment string
-    // The expiry field is the encrypted expiry date of the password stored in the entry.
-    expiry string
-    // The extras field is extra encrypted JSON data associated with the entry.
-    extras string
+    // The Permissions field is the encrypted string describing the permissions that the user has for this entry.  The permissions are granted
+    // by the associated authority.
+    Permissions string
+    // AuthorityId is the foreign key of the user granting the permissions for this entry.
+    AuthorityId int64
+    // The authority field is the pointer to the authorizing user's object.
+    authority *User
 
-    // The userdata field is extra encrypted user-specific JSON data associated with the entry.
-    userdata string
+    // The Group field is the encrypted name of the group to which the entry belongs.
+    Group string
+    // The Icon field is the encrypted image data or path to image file of the entry.
+    Icon string
+    // The Title field is the encrypted title of the entry.
+    Title string
 
-    // Mutex to synchronize read/write access to fields.
-    mutex sync.RWMutex
+    // The Username field is the encrypted username stored in the entry.
+    Username string
+    // The Password field is the encrypted password stored in the entry.
+    Password string
+    // The Url field is the encrypted url stored in the entry.
+    Url string
+    // The Comment field is the encrypted comment stored in the entry.
+    Comment string
+    // The Expiry field is the encrypted expiry date of the password stored in the entry.
+    Expiry string
+    // The Extras field is extra encrypted JSON data associated with the entry.
+    Extras string
+
+    // The Userdata field is extra encrypted user-specific JSON data associated with the entry.
+    Userdata string
 }
 
-// The canDo function determines if the provided encrypted grants string authorizes the user to perform some arbitrary action which
-// is determined by the calling context.  The entry mutex must be locked for reading prior to calling this method.
-func (this *Entry) canDo(encryptedGrants string, user string, key []byte) bool {
-    data, err := Decrypt(encryptedGrants, key)
-    if err != nil {
-        return false
+// The getAuthority function finds the authority user model instance and sets the internal reference pointer.
+func (this *EntryView) getAuthority() *User {
+    if this.authority == nil {
+        var authority User
+        DB.Model(this).Related(&authority, "AuthorityId")
+        this.authority = &authority
     }
+    return this.authority
+}
 
-    var grants []Grant
-    e := json.Unmarshal(data, &grants)
-    if e != nil {
-        return false
+// The getUser function finds the user model instance and sets the internal reference pointer.
+func (this *EntryView) getUser() *User {
+    if this.user == nil {
+        var user User
+        DB.Model(this).Related(&user, "UserId")
+        this.user = &user
     }
+    return this.user
+}
 
-    for _, g := range grants {
-        if g.For(this.id, user) {
-            return true
+// ReadGroup reads the group field of the entry, provided that the user has appropriate permissions.
+// Read access to the group field is granted to users with any permissions, since this field is necessary in order to be able
+// to display the entry properly.
+func (this *EntryView) ReadGroup() (string, error) {
+    if this.getUser().Can("*", this) {
+        data, err := this.getUser().Decrypt(this.Group)
+        if err != nil {
+            return "", err
         }
+        return string(data), nil
     }
-    return false
+    return "", &Error{ErrPermission, this.user.Name, "group read permission denied"}
 }
 
-// The canRead function determines if the given user has read access to the entry.
-// The entry mutex must be locked for reading prior to calling this method.
-func (this *Entry) canRead(user string, key []byte) bool {
-    return this.canDo(this.read, user, key)
-}
-
-// The canWrite function determines if the given user has write access to the entry.
-// The entry mutex must be locked for reading prior to calling this method.
-func (this *Entry) canWrite(user string, key []byte) bool {
-    return this.canDo(this.write, user, key)
-}
-
-// The canDelegate function determines if the given user has delegation permissions on the entry.
-// The entry mutex must be locked for reading prior to calling this method.
-func (this *Entry) canDelegate(user string, key []byte) bool {
-    return this.canDo(this.delegate, user, key)
-}
-
-// ReadGroup reads the group field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-// Read access to the group field is granted to users with read, write, or delegation permission, since this field is necessary
+// ReadIcon reads the icon field of the entry, provided that the user has appropriate permissions.
+// Read access to the icon field is granted to users with any permissions, since this field is necessary
 // in order to be able to display the entry properly.
-func (this *Entry) ReadGroup(user string, key []byte) (string, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) || this.canWrite(user, key) || this.canDelegate(user, key) {
-        data, err := Decrypt(this.group, key)
+func (this *EntryView) ReadIcon() (string, error) {
+    if this.getUser().Can("*", this) {
+        data, err := this.getUser().Decrypt(this.Icon)
         if err != nil {
-            return "", err.SetUser(user)
+            return "", err
         }
+
         return string(data), nil
     }
-    return "", &Error{ErrPermission, user, "group read permission denied"}
+    return "", &Error{ErrPermission, this.user.Name, "icon read permission denied"}
 }
 
-// ReadIcon reads the icon field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-// Read access to the icon field is granted to users with read, write, or delegation permission, since this field is necessary
+// ReadTitle reads the title field of the entry, provided that the user has appropriate permissions.
+// Read access to the title field is granted to users with any permissions, since this field is necessary
 // in order to be able to display the entry properly.
-func (this *Entry) ReadIcon(user string, key []byte) (image.Image, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) || this.canWrite(user, key) || this.canDelegate(user, key) {
-        data, err := Decrypt(this.icon, key)
+func (this *EntryView) ReadTitle() (string, error) {
+    if this.getUser().Can("*", this) {
+        data, err := this.getUser().Decrypt(this.Title)
         if err != nil {
-            return nil, err.SetUser(user)
-        }
-
-        r := bytes.NewReader(data)
-        img, e := png.Decode(r)
-        if e != nil {
-            return nil, &Error{ErrOther, user, e.Error()}
-        }
-        return img, nil
-    }
-    return nil, &Error{ErrPermission, user, "icon read permission denied"}
-}
-
-// ReadTitle reads the title field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-// Read access to the title field is granted to users with read, write, or delegation permission, since this field is necessary
-// in order to be able to display the entry properly.
-func (this *Entry) ReadTitle(user string, key []byte) (string, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) || this.canWrite(user, key) || this.canDelegate(user, key) {
-        data, err := Decrypt(this.title, key)
-        if err != nil {
-            return "", err.SetUser(user)
+            return "", err
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, user, "title read permission denied"}
+    return "", &Error{ErrPermission, this.user.Name, "title read permission denied"}
 }
 
-// ReadUsername reads the username field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-func (this *Entry) ReadUsername(user string, key []byte) (string, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) {
-        data, err := Decrypt(this.username, key)
+// ReadUsername reads the username field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) ReadUsername() (string, error) {
+    if this.getUser().Can("r", this) {
+        data, err := this.getUser().Decrypt(this.Username)
         if err != nil {
-            return "", err.SetUser(user)
+            return "", err
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, user, "username read permission denied"}
+    return "", &Error{ErrPermission, this.user.Name, "username read permission denied"}
 }
 
-// ReadPassword reads the password field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-func (this *Entry) ReadPassword(user string, key []byte) (string, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) {
-        data, err := Decrypt(this.password, key)
+// ReadPassword reads the password field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) ReadPassword() (string, error) {
+    if this.getUser().Can("r", this) {
+        data, err := this.getUser().Decrypt(this.Password)
         if err != nil {
-            return "", err.SetUser(user)
+            return "", err
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, user, "password read permission denied"}
+    return "", &Error{ErrPermission, this.user.Name, "password read permission denied"}
 }
 
-// ReadUrl reads the password field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-func (this *Entry) ReadUrl(user string, key []byte) (string, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) {
-        data, err := Decrypt(this.url, key)
+// ReadUrl reads the password field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) ReadUrl() (string, error) {
+    if this.getUser().Can("r", this) {
+        data, err := this.getUser().Decrypt(this.Url)
         if err != nil {
-            return "", err.SetUser(user)
+            return "", err
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, user, "URL read permission denied"}
+    return "", &Error{ErrPermission, this.user.Name, "URL read permission denied"}
 }
 
-// ReadComment reads the comment field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-func (this *Entry) ReadComment(user string, key []byte) (string, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) {
-        data, err := Decrypt(this.comment, key)
+// ReadComment reads the comment field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) ReadComment() (string, error) {
+    if this.getUser().Can("r", this) {
+        data, err := this.getUser().Decrypt(this.Comment)
         if err != nil {
-            return "", err.SetUser(user)
+            return "", err
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, user, "comment read permission denied"}
+    return "", &Error{ErrPermission, this.user.Name, "comment read permission denied"}
 }
 
-// ReadExpiry reads the expiry date field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-func (this *Entry) ReadExpiry(user string, key []byte) (time.Time, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) {
-        data, err := Decrypt(this.expiry, key)
+// ReadExpiry reads the expiry date field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) ReadExpiry() (time.Time, error) {
+    if this.getUser().Can("r", this) {
+        data, err := this.getUser().Decrypt(this.Expiry)
         if err != nil {
-            return time.Now(), err.SetUser(user)
+            return time.Now(), err
         }
 
         var t time.Time
-        e := t.UnmarshalText(data)
-        if e != nil {
-            return time.Now(), &Error{ErrOther, user, e.Error()}
+        err = t.UnmarshalText(data)
+        if err != nil {
+            return time.Now(), WrapError(err).SetCode(ErrOther).SetUser(this.user)
         }
         return t, nil
     }
-    return time.Now(), &Error{ErrPermission, user, "expiry date read permission denied"}
+    return time.Now(), &Error{ErrPermission, this.user.Name, "expiry date read permission denied"}
 }
 
-// ReadExtras reads the extras field of the entry, provided that the user has appropriate permissions and a valid decryption key.
-func (this *Entry) ReadExtras(user string, key []byte) (map[string]interface{}, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    if this.canRead(user, key) {
-        data, err := Decrypt(this.extras, key)
+// ReadExtras reads the extras field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) ReadExtras(user string) (interface{}, error) {
+    if this.getUser().Can("r", this) {
+        data, err := this.getUser().Decrypt(this.Extras)
         if err != nil {
-            return nil, err.SetUser(user)
+            return nil, err
         }
 
         var extras interface{}
-        e := json.Unmarshal(data, &extras)
-        if e != nil {
-            return nil, &Error{ErrOther, user, e.Error()}
+        err = json.Unmarshal(data, &extras)
+        if err != nil {
+            return nil, WrapError(err).SetCode(ErrOther).SetUser(this.user)
         }
-        return extras.(map[string]interface{}), nil
+        return extras, nil
     }
-    return nil, &Error{ErrPermission, user, "comment read permission denied"}
+    return nil, &Error{ErrPermission, this.user.Name, "comment read permission denied"}
 }
 
-// ReadUserdata reads the userdata field of the entry, provided that the user has a valid decryption key.
-// No specific permissions are required since this field is only ever accesible by the user and is not propagated to others.
-func (this *Entry) ReadUserdata(user string, key []byte) (map[string]interface{}, error) {
-    this.mutex.RLock()
-    defer this.mutex.RUnlock()
-
-    data, err := Decrypt(this.userdata, key)
+// ReadUserdata reads the userdata field of the entry.
+// No specific permissions are required since this field is only ever accessible by the user and is not propagated to others.
+func (this *EntryView) ReadUserdata() (interface{}, error) {
+    data, err := this.getUser().Decrypt(this.Userdata)
     if err != nil {
-        return nil, err.SetUser(user)
+        return nil, err
     }
 
     var userdata interface{}
-    e := json.Unmarshal(data, &userdata)
-    if e != nil {
-        return nil, &Error{ErrOther, user, e.Error()}
+    err = json.Unmarshal(data, &userdata)
+    if err != nil {
+        return nil, WrapError(err).SetCode(ErrOther).SetUser(this.user)
     }
     return userdata.(map[string]interface{}), nil
 }
 
-// WriteGroup writes the group field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteGroup(user string, key []byte, group string) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(group), key)
+// WriteGroup writes the group field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteGroup(group string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(group))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.group = data
-        this.modified = utils.AppendUnique(this.modified, "group")
+        this.Group = data
         return nil
     }
-    return &Error{ErrPermission, user, "group write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "group write permission denied"}
 }
 
-// WriteIcon writes the icon field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteIcon(user string, key []byte, icon image.Image) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        var w bytes.Buffer
-        e := png.Encode(&w, icon)
-        if e != nil {
-            return &Error{ErrOther, user, e.Error()}
-        }
-
-        data, err := Encrypt(w.Bytes(), key)
+// WriteIcon writes the icon field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteIcon(icon string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(icon))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.icon = data
-        this.modified = utils.AppendUnique(this.modified, "icon")
+        this.Icon = data
         return nil
     }
-    return &Error{ErrPermission, user, "icon write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "icon write permission denied"}
 }
 
-// WriteTitle writes the title field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteTitle(user string, key []byte, title string) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(title), key)
+// WriteTitle writes the title field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteTitle(title string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(title))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.title = data
-        this.modified = utils.AppendUnique(this.modified, "title")
+        this.Title = data
         return nil
     }
-    return &Error{ErrPermission, user, "title write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "title write permission denied"}
 }
 
-// WriteUsername writes the username field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteUsername(user string, key []byte, username string) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(username), key)
+// WriteUsername writes the username field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteUsername(username string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(username))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.username = data
-        this.modified = utils.AppendUnique(this.modified, "username")
+        this.Username = data
         return nil
     }
-    return &Error{ErrPermission, user, "username write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "username write permission denied"}
 }
 
-// WritePassword writes the password field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WritePassword(user string, key []byte, password string) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(password), key)
+// WritePassword writes the password field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WritePassword(password string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(password))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.password = data
-        this.modified = utils.AppendUnique(this.modified, "password")
+        this.Password = data
         return nil
     }
-    return &Error{ErrPermission, user, "password write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "password write permission denied"}
 }
 
-// WriteUrl writes the url field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteUrl(user string, key []byte, url string) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(url), key)
+// WriteUrl writes the url field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteUrl(url string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(url))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.url = data
-        this.modified = utils.AppendUnique(this.modified, "url")
+        this.Url = data
         return nil
     }
-    return &Error{ErrPermission, user, "url write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "url write permission denied"}
 }
 
-// WriteComment writes the comment field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteComment(user string, key []byte, comment string) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(comment), key)
+// WriteComment writes the comment field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteComment(comment string) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(comment))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.comment = data
-        this.modified = utils.AppendUnique(this.modified, "comment")
+        this.Comment = data
         return nil
     }
-    return &Error{ErrPermission, user, "comment write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "comment write permission denied"}
 }
 
-// WriteExpiry writes the expiry field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteExpiry(user string, key []byte, expiry time.Time) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        data, err := Encrypt([]byte(expiry.Format(time.RFC3339)), key)
+// WriteExpiry writes the expiry field of the entry, provided that the user has appropriate permissions.
+func (this *EntryView) WriteExpiry(expiry time.Time) error {
+    if this.getUser().Can("w", this) {
+        data, err := this.getUser().Encrypt([]byte(expiry.Format(time.RFC3339)))
         if err != nil {
-            return err.SetUser(user)
+            return err
         }
-        this.expiry = data
-        this.modified = utils.AppendUnique(this.modified, "expiry")
+        this.Expiry = data
         return nil
     }
-    return &Error{ErrPermission, user, "expiry date write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "expiry date write permission denied"}
 }
 
 // WriteExtras writes the extras field of the entry, provided that the user has appropriate permissions and a valid encryption key.
-func (this *Entry) WriteExtras(user string, key []byte, extras interface{}) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    if this.canWrite(user, key) {
-        bytes, e := json.Marshal(extras)
-        if e != nil {
-            return &Error{ErrOther, user, e.Error()}
-        }
-
-        data, err := Encrypt(bytes, key)
+func (this *EntryView) WriteExtras(extras interface{}) error {
+    if this.getUser().Can("w", this) {
+        bytes, err := json.Marshal(extras)
         if err != nil {
-            return err.SetUser(user)
+            return WrapError(err).SetCode(ErrOther).SetUser(this.user)
         }
-        this.extras = data
-        this.modified = utils.AppendUnique(this.modified, "extras")
+
+        data, e := this.getUser().Encrypt(bytes)
+        if e != nil {
+            return e
+        }
+        this.Extras = data
         return nil
     }
-    return &Error{ErrPermission, user, "extras write permission denied"}
+    return &Error{ErrPermission, this.user.Name, "extras write permission denied"}
 }
 
 // WriteUserdata writes the userdata field of the entry, provided that the user a valid encryption key.
-func (this *Entry) WriteUserdata(user string, key []byte, userdata interface{}) error {
-    this.mutex.Lock()
-    defer this.mutex.Unlock()
-
-    bytes, e := json.Marshal(userdata)
-    if e != nil {
-        return &Error{ErrOther, user, e.Error()}
-    }
-
-    data, err := Encrypt(bytes, key)
+func (this *EntryView) WriteUserdata(userdata interface{}) error {
+    bytes, err := json.Marshal(userdata)
     if err != nil {
-        return err.SetUser(user)
+        return WrapError(err).SetCode(ErrOther).SetUser(this.user)
     }
-    this.userdata = data
-    this.modified = utils.AppendUnique(this.modified, "userdata")
+
+    data, e := this.getUser().Encrypt(bytes)
+    if e != nil {
+        return e
+    }
+    this.Userdata = data
     return nil
 }

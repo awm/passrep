@@ -45,8 +45,8 @@ func (this *Error) Error() string {
 }
 
 // SetUser changes the user field after creation.
-func (this *Error) SetUser(user string) *Error {
-    this.User = user
+func (this *Error) SetUser(user *User) *Error {
+    this.User = user.Name
     return this
 }
 
@@ -54,4 +54,9 @@ func (this *Error) SetUser(user string) *Error {
 func (this *Error) SetCode(code ErrorCode) *Error {
     this.Code = code
     return this
+}
+
+// WrapError creates a new Error instance from a standard Go error.
+func WrapError(err error) *Error {
+    return &Error{Msg: err.Error()}
 }
