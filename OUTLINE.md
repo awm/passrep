@@ -1,12 +1,12 @@
 Outline of Behaviour
 ====================
 
-- User's private key is derived from user's password
-- Individual entries encrypted using user's private key
+- User's private keys are derived from user's password
+- Individual entries encrypted using user's private encryption key
 - Access control settings determine read, write, and delegate access to individual entries and groups of entries
 - Change procedure:
     - User changes local entry
-    - Change notification is encrypted for each user with read access to that entry using modifier's private key and reader's public key
+    - Change notification is encrypted for each user with read access to that entry using secret calculated from modifier's private signing key and reader's public signing key
     - Encrypted change notification pushed on to each user's change queue
     - When user logs in, queued changes are replayed into their local entries
     - Only the latest change may be queued for a particular entry, with the earlier one dropped if a newer one is enqueued
@@ -20,6 +20,6 @@ Outline of Behaviour
         - Entries that match are decrypted using the cached key and then re-encrypted using the new one
     - Each queued entry in the database is evaluated to see if it was encrypted by this user
         - Entries that match are decrypted using the cached key and then re-encrypted using the new one
-    - Each grant in the database is evaluated to see if it corresponds to this user
-        - Grants which match are re-signed using the new key
     - The cached old key is discarded
+ - If a user is deleted while other users have pending permission grants from him, the permission grants are re-written to be from admin
+ 
