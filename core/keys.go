@@ -28,7 +28,7 @@ func MakeKeys(user *User, password string) (*Keys, error) {
 
     salt, err := user.GetCryptoSalt()
     if err != nil {
-        return nil, err
+        return nil, NewError(err, user)
     }
     keys.CryptoKey = pbkdf2.Key(pwbytes, salt, 100000, 32, sha512.New)
 
@@ -37,7 +37,7 @@ func MakeKeys(user *User, password string) (*Keys, error) {
     one := new(big.Int).SetInt64(1)
     salt, err = user.GetSigningSalt()
     if err != nil {
-        return nil, err
+        return nil, NewError(err, user)
     }
     raw := pbkdf2.Key(pwbytes, salt, 100000, params.BitSize/8+8, sha512.New)
     k := new(big.Int).SetBytes(raw)

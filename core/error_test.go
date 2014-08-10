@@ -14,14 +14,20 @@ type ErrorTestSuite struct {
 }
 
 func (suite *ErrorTestSuite) TestCreation() {
-    e := &Error{Code: ErrOther, User: "test.user", Msg: "A test error"}
-    assert.EqualError(suite.T(), e, "Other error for test.user: A test error", "Error did not match")
+    e := NewError("A test error", "test.user")
+    assert.Error(suite.T(), e)
+    assert.Contains(suite.T(), e.Error(), "error_test.go:17 - test.user: A test error")
 }
 
 func (suite *ErrorTestSuite) TestWrapping() {
     u := User{Name: "test.user"}
-    e := WrapError(assert.AnError).SetCode(ErrOther).SetUser(&u)
-    assert.EqualError(suite.T(), e, "Other error for test.user: assert.AnError general error for testing", "Error did not match")
+    e := NewError(assert.AnError, &u)
+    assert.Error(suite.T(), e)
+    assert.Contains(suite.T(), e.Error(), "error_test.go:24 - test.user: assert.AnError general error for testing")
+
+    e = NewError(assert.AnError)
+    assert.Error(suite.T(), e)
+    assert.Contains(suite.T(), e.Error(), "error_test.go:28: assert.AnError general error for testing")
 }
 
 func TestErrorTestSuite(t *testing.T) {
