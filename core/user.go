@@ -3,8 +3,13 @@ package core
 import (
     "crypto/aes"
     "crypto/cipher"
+    "crypto/ecdsa"
+    "crypto/rand"
+    "crypto/sha512"
+    "encoding/asn1"
     "encoding/base64"
     "github.com/awm/passrep/utils"
+    "math/big"
     "strings"
     "time"
 )
@@ -21,12 +26,12 @@ type User struct {
     // The Name is the user's username.
     Name string `sql:"not null;unique"`
     // The CryptoSalt is a base64 encoded random value used when generating the user's symmetric encryption keys.
-    CryptoSalt string
+    CryptoSalt string `sql:"not null;unique"`
     // The SigningSalt is a base64 encoded random value used when generating the user's ECDSA keys.
-    SigningSalt string
+    SigningSalt string `sql:"not null;unique"`
 
     // PublicKey is the user's current public key.
-    PublicKey string
+    PublicKey string `sql:"not null;unique"`
 
     // The keys field is a reference to the user's private keys and is only potentially valid while the user has an active session.
     keys *Keys `sql:"-"`
@@ -95,10 +100,14 @@ func (this *User) GetSigningSalt() ([]byte, *Error) {
 // The special value "*" may be used for the query to determine if the user has any permissions
 // on the entry.
 func (this *User) Can(query string, entry *EntryView) bool {
-    raw, err := entry.getAuthority().Verify(entry.Permissions)
-    if err != nil {
+    ok, raw, err := entry.getAuthority().Verify(entry.Permissions)
+    if !ok || err != nil {
         return false
     }
+    // if !entry.getAuthority().Can("d", entry) {
+    //     return false
+    // }
+
     permissions := string(raw)
     for _, p := range permissions {
         if !strings.Contains(ValidPermissions, string(p)) {
@@ -121,8 +130,8 @@ func (this *User) Can(query string, entry *EntryView) bool {
     return false
 }
 
-// The getGCM function initializes a new GCM instance with the given key.
-func (this *User) getGCM(key []byte) (cipher.AEAD, *Error) {
+// The makeGCM function initializes a new GCM instance with the given key.
+func (this *User) makeGCM(key []byte) (cipher.AEAD, *Error) {
     c, err := aes.NewCipher(key)
     if err != nil {
         return nil, NewError(err, this)
@@ -137,9 +146,9 @@ func (this *User) getGCM(key []byte) (cipher.AEAD, *Error) {
 }
 
 // The getEncryptionKey function obtains the user's private symmetric encryption key, if available.
-func (this *User) getEncryptionKey() *[]byte {
+func (this *User) getEncryptionKey() []byte {
     if this.keys != nil {
-        return &this.keys.CryptoKey
+        return this.keys.CryptoKey
     }
     return nil
 }
@@ -156,7 +165,7 @@ func (this *User) Decrypt(encrypted string) ([]byte, error) {
         return nil, NewError("Private key unavailable", this)
     }
 
-    gcm, e := this.getGCM(*key)
+    gcm, e := this.makeGCM(key)
     if e != nil {
         return nil, e
     }
@@ -180,7 +189,7 @@ func (this *User) Encrypt(data []byte) (string, error) {
         return "", NewError("Private key unavailable", this)
     }
 
-    gcm, err := this.getGCM(*key)
+    gcm, err := this.makeGCM(key)
     if err != nil {
         return "", err
     }
@@ -195,11 +204,135 @@ func (this *User) Encrypt(data []byte) (string, error) {
     return result, nil
 }
 
-func (this *User) Verify(signed string) ([]byte, error) {
-    // raw, err := base64.StdEncoding.DecodeString(signed)
-    // if err != nil {
-    //     return nil, WrapError(err).SetUser(this).SetCode(ErrEncoding)
-    // }
+// The makeSharedSecret function generates a symmetric encryption key from this user's private key and the
+// other user's public key.
+func (this *User) makeSharedSecret(other *User) ([]byte, error) {
+    rawPubKey, err := base64.StdEncoding.DecodeString(other.PublicKey)
+    if err != nil {
+        return nil, NewError(err, this)
+    }
 
-    return nil, NewError("Not yet implemented", this)
+    var pubKey ecdsa.PublicKey
+    _, err = asn1.Unmarshal(rawPubKey, &pubKey)
+    if err != nil {
+        return nil, NewError(err, this)
+    }
+
+    x, y := this.keys.SigningKey.ScalarMult(pubKey.X, pubKey.Y, this.keys.SigningKey.D.Bytes())
+    zero := big.NewInt(0)
+    if zero.Cmp(x) == 0 && zero.Cmp(y) == 0 {
+        return nil, NewError("Invalid point", this)
+    }
+
+    secret := x.Bytes()
+    for i := 0; i < 10000; i++ {
+        hash := sha512.Sum512(secret)
+        secret = hash[:]
+    }
+    return secret, nil
+}
+
+// The DecryptShared function base64 decodes and decrypts data using a shared secret determined between two users.
+func (this *User) DecryptShared(encrypted string, signed string, other *User) ([]byte, []byte, error) {
+    rawEncrypted, err := base64.StdEncoding.DecodeString(encrypted)
+    if err != nil {
+        return nil, nil, NewError(err, this)
+    }
+    rawSigned, err := base64.StdEncoding.DecodeString(signed)
+    if err != nil {
+        return nil, nil, NewError(err, this)
+    }
+
+    key, err := this.makeSharedSecret(other)
+    if err != nil {
+        return nil, nil, err
+    }
+
+    gcm, e := this.makeGCM(key)
+    if e != nil {
+        return nil, nil, e
+    }
+
+    nonceLen := gcm.NonceSize()
+    if len(rawEncrypted) < nonceLen {
+        return nil, nil, NewError("Data too short", this)
+    }
+
+    data, err := gcm.Open(rawEncrypted[nonceLen:], rawEncrypted[:nonceLen], rawEncrypted[nonceLen:], rawSigned)
+    if err != nil {
+        return nil, nil, NewError(err, this)
+    }
+
+    return data, rawSigned, nil
+}
+
+// The EncryptShared function encrypts and base64 encodes data using a shared secret determined between two users.
+func (this *User) EncryptShared(data []byte, sign []byte, other *User) (string, string, error) {
+    key, err := this.makeSharedSecret(other)
+    if err != nil {
+        return "", "", err
+    }
+
+    gcm, err := this.makeGCM(key)
+    if err != nil {
+        return "", "", err
+    }
+
+    nonce := utils.RandomBytes(gcm.NonceSize())
+    if nonce == nil {
+        return "", "", NewError("Nonce generation failed", this)
+    }
+
+    raw := gcm.Seal(data, nonce, data, sign)
+    result := base64.StdEncoding.EncodeToString(append(nonce, raw...))
+    encoded := base64.StdEncoding.EncodeToString(sign)
+    return result, encoded, nil
+}
+
+// Verify checks that this user signed the encoded blob of data.
+func (this *User) Verify(signed string) (bool, []byte, error) {
+    raw, err := base64.StdEncoding.DecodeString(signed)
+    if err != nil {
+        return false, nil, NewError(err, this)
+    }
+
+    rawKey, err := base64.StdEncoding.DecodeString(this.PublicKey)
+    if err != nil {
+        return false, nil, NewError(err, this)
+    }
+
+    var key ecdsa.PublicKey
+    _, err = asn1.Unmarshal(rawKey, &key)
+    if err != nil {
+        return false, nil, NewError(err, this)
+    }
+
+    var sig Signature
+    remaining, err := asn1.Unmarshal(raw, &sig)
+    if err != nil {
+        return false, nil, NewError(err, this)
+    }
+
+    hash := sha512.Sum512(remaining)
+    return ecdsa.Verify(&key, hash[:], sig.R, sig.S), remaining, nil
+}
+
+// Sign encodes the provided data and adds a signature generated from the user's private signing key.
+func (this *User) Sign(data []byte) (string, error) {
+    hash := sha512.Sum512(data)
+
+    var err error
+    var sig Signature
+    sig.R, sig.S, err = ecdsa.Sign(rand.Reader, this.keys.SigningKey, hash[:])
+    if err != nil {
+        return "", NewError(err, this)
+    }
+
+    rawSig, err := asn1.Marshal(&sig)
+    if err != nil {
+        return "", NewError(err, this)
+    }
+
+    result := base64.StdEncoding.EncodeToString(append(rawSig, data...))
+    return result, nil
 }

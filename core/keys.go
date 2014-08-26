@@ -8,6 +8,12 @@ import (
     "math/big"
 )
 
+// The Signature structure represents a ECDSA signature.
+type Signature struct {
+    R   *big.Int
+    S   *big.Int
+}
+
 // The Keys structure holds the private cryptographic and signing keys of a user.
 type Keys struct {
     // The CryptoKey field is the private symmetric encryption key for the user's own data.
