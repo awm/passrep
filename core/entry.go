@@ -20,16 +20,12 @@ type EntryView struct {
 
     // UserId is the foreign key of the owning user's database entry.
     UserId int64
-    // The user field is the pointer to the owning user's object.
-    user *User
 
-    // The Permissions field is the encrypted string describing the permissions that the user has for this entry.  The permissions are granted
+    // The Permissions field is the signed string describing the permissions that the user has for this entry.  The permissions are granted
     // by the associated authority.
     Permissions string
     // AuthorityId is the foreign key of the user granting the permissions for this entry.
     AuthorityId int64
-    // The authority field is the pointer to the authorizing user's object.
-    authority *User
 
     // The Group field is the encrypted name of the group to which the entry belongs.
     Group string
@@ -57,22 +53,16 @@ type EntryView struct {
 
 // The getAuthority function finds the authority user model instance and sets the internal reference pointer.
 func (this *EntryView) getAuthority() *User {
-    if this.authority == nil {
-        var authority User
-        DB.Model(this).Related(&authority, "AuthorityId")
-        this.authority = &authority
-    }
-    return this.authority
+    authority := new(User)
+    DB.Model(this).Related(authority, "AuthorityId")
+    return authority
 }
 
 // The getUser function finds the user model instance and sets the internal reference pointer.
 func (this *EntryView) getUser() *User {
-    if this.user == nil {
-        var user User
-        DB.Model(this).Related(&user, "UserId")
-        this.user = &user
-    }
-    return this.user
+    user := new(User)
+    DB.Model(this).Related(user, "UserId")
+    return user
 }
 
 // ReadGroup reads the group field of the entry, provided that the user has appropriate permissions.
@@ -86,7 +76,7 @@ func (this *EntryView) ReadGroup() (string, error) {
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "group read permission denied"}
+    return "", NewError("Group read permission denied", this.getUser())
 }
 
 // ReadIcon reads the icon field of the entry, provided that the user has appropriate permissions.
@@ -101,7 +91,7 @@ func (this *EntryView) ReadIcon() (string, error) {
 
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "icon read permission denied"}
+    return "", NewError("Icon read permission denied", this.getUser())
 }
 
 // ReadTitle reads the title field of the entry, provided that the user has appropriate permissions.
@@ -115,7 +105,7 @@ func (this *EntryView) ReadTitle() (string, error) {
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "title read permission denied"}
+    return "", NewError("Title read permission denied", this.getUser())
 }
 
 // ReadUsername reads the username field of the entry, provided that the user has appropriate permissions.
@@ -127,7 +117,7 @@ func (this *EntryView) ReadUsername() (string, error) {
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "username read permission denied"}
+    return "", NewError("Username read permission denied", this.getUser())
 }
 
 // ReadPassword reads the password field of the entry, provided that the user has appropriate permissions.
@@ -139,7 +129,7 @@ func (this *EntryView) ReadPassword() (string, error) {
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "password read permission denied"}
+    return "", NewError("Password read permission denied", this.getUser())
 }
 
 // ReadUrl reads the password field of the entry, provided that the user has appropriate permissions.
@@ -151,7 +141,7 @@ func (this *EntryView) ReadUrl() (string, error) {
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "URL read permission denied"}
+    return "", NewError("URL read permission denied", this.getUser())
 }
 
 // ReadComment reads the comment field of the entry, provided that the user has appropriate permissions.
@@ -163,7 +153,7 @@ func (this *EntryView) ReadComment() (string, error) {
         }
         return string(data), nil
     }
-    return "", &Error{ErrPermission, this.user.Name, "comment read permission denied"}
+    return "", NewError("Comment read permission denied", this.getUser())
 }
 
 // ReadExpiry reads the expiry date field of the entry, provided that the user has appropriate permissions.
@@ -177,11 +167,11 @@ func (this *EntryView) ReadExpiry() (time.Time, error) {
         var t time.Time
         err = t.UnmarshalText(data)
         if err != nil {
-            return time.Now(), WrapError(err).SetCode(ErrOther).SetUser(this.user)
+            return time.Now(), NewError(err, this.getUser())
         }
         return t, nil
     }
-    return time.Now(), &Error{ErrPermission, this.user.Name, "expiry date read permission denied"}
+    return time.Now(), NewError("Expiry date read permission denied", this.getUser())
 }
 
 // ReadExtras reads the extras field of the entry, provided that the user has appropriate permissions.
@@ -195,11 +185,11 @@ func (this *EntryView) ReadExtras(user string) (interface{}, error) {
         var extras interface{}
         err = json.Unmarshal(data, &extras)
         if err != nil {
-            return nil, WrapError(err).SetCode(ErrOther).SetUser(this.user)
+            return nil, NewError(err, this.getUser())
         }
         return extras, nil
     }
-    return nil, &Error{ErrPermission, this.user.Name, "comment read permission denied"}
+    return nil, NewError("Comment read permission denied", this.getUser())
 }
 
 // ReadUserdata reads the userdata field of the entry.
@@ -213,7 +203,7 @@ func (this *EntryView) ReadUserdata() (interface{}, error) {
     var userdata interface{}
     err = json.Unmarshal(data, &userdata)
     if err != nil {
-        return nil, WrapError(err).SetCode(ErrOther).SetUser(this.user)
+        return nil, NewError(err, this.getUser())
     }
     return userdata.(map[string]interface{}), nil
 }
@@ -228,7 +218,7 @@ func (this *EntryView) WriteGroup(group string) error {
         this.Group = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "group write permission denied"}
+    return NewError("Group write permission denied", this.getUser())
 }
 
 // WriteIcon writes the icon field of the entry, provided that the user has appropriate permissions.
@@ -241,7 +231,7 @@ func (this *EntryView) WriteIcon(icon string) error {
         this.Icon = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "icon write permission denied"}
+    return NewError("Icon write permission denied", this.getUser())
 }
 
 // WriteTitle writes the title field of the entry, provided that the user has appropriate permissions.
@@ -254,7 +244,7 @@ func (this *EntryView) WriteTitle(title string) error {
         this.Title = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "title write permission denied"}
+    return NewError("Title write permission denied", this.getUser())
 }
 
 // WriteUsername writes the username field of the entry, provided that the user has appropriate permissions.
@@ -267,7 +257,7 @@ func (this *EntryView) WriteUsername(username string) error {
         this.Username = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "username write permission denied"}
+    return NewError("Username write permission denied", this.getUser())
 }
 
 // WritePassword writes the password field of the entry, provided that the user has appropriate permissions.
@@ -280,7 +270,7 @@ func (this *EntryView) WritePassword(password string) error {
         this.Password = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "password write permission denied"}
+    return NewError("Password write permission denied", this.getUser())
 }
 
 // WriteUrl writes the url field of the entry, provided that the user has appropriate permissions.
@@ -293,7 +283,7 @@ func (this *EntryView) WriteUrl(url string) error {
         this.Url = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "url write permission denied"}
+    return NewError("URL write permission denied", this.getUser())
 }
 
 // WriteComment writes the comment field of the entry, provided that the user has appropriate permissions.
@@ -306,7 +296,7 @@ func (this *EntryView) WriteComment(comment string) error {
         this.Comment = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "comment write permission denied"}
+    return NewError("Comment write permission denied", this.getUser())
 }
 
 // WriteExpiry writes the expiry field of the entry, provided that the user has appropriate permissions.
@@ -319,7 +309,7 @@ func (this *EntryView) WriteExpiry(expiry time.Time) error {
         this.Expiry = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "expiry date write permission denied"}
+    return NewError("Expiry date write permission denied", this.getUser())
 }
 
 // WriteExtras writes the extras field of the entry, provided that the user has appropriate permissions and a valid encryption key.
@@ -327,7 +317,7 @@ func (this *EntryView) WriteExtras(extras interface{}) error {
     if this.getUser().Can("w", this) {
         bytes, err := json.Marshal(extras)
         if err != nil {
-            return WrapError(err).SetCode(ErrOther).SetUser(this.user)
+            return NewError(err, this.getUser())
         }
 
         data, e := this.getUser().Encrypt(bytes)
@@ -337,14 +327,14 @@ func (this *EntryView) WriteExtras(extras interface{}) error {
         this.Extras = data
         return nil
     }
-    return &Error{ErrPermission, this.user.Name, "extras write permission denied"}
+    return NewError("Extras write permission denied", this.getUser())
 }
 
 // WriteUserdata writes the userdata field of the entry, provided that the user a valid encryption key.
 func (this *EntryView) WriteUserdata(userdata interface{}) error {
     bytes, err := json.Marshal(userdata)
     if err != nil {
-        return WrapError(err).SetCode(ErrOther).SetUser(this.user)
+        return NewError(err, this.getUser())
     }
 
     data, e := this.getUser().Encrypt(bytes)
