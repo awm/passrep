@@ -4,10 +4,12 @@ import (
     "crypto/aes"
     "crypto/cipher"
     "crypto/ecdsa"
+    "crypto/elliptic"
     "crypto/rand"
     "crypto/sha512"
     "encoding/asn1"
     "encoding/base64"
+    "errors"
     "github.com/awm/passrep/utils"
     "math/big"
     "strings"
@@ -65,6 +67,11 @@ func NewUser(name string, password string) (*User, error) {
     }
     user.keys = keys
 
+    err = user.updatePublicKey()
+    if err != nil {
+        return nil, NewError(err)
+    }
+
     DB.Create(user)
     return user, nil
 }
@@ -76,6 +83,21 @@ func LoadUser(name string) (*User, error) {
         return nil, NewError("User '" + name + "' not found")
     }
     return user, nil
+}
+
+// The updatePublicKey function encodes the public key stored in the keys member and populates the PublicKey member with it.
+func (this *User) updatePublicKey() error {
+    if this.keys == nil {
+        return errors.New("Keys not available")
+    } else {
+        raw, err := asn1.Marshal(*this.keys.PublicSigningKeyNoCurve())
+        if err != nil {
+            return err
+        }
+
+        this.PublicKey = base64.StdEncoding.EncodeToString(raw)
+        return nil
+    }
 }
 
 // GetCryptoSalt decodes to a byte slice the base64 encoded CryptoSalt.
@@ -301,11 +323,12 @@ func (this *User) Verify(signed string) (bool, []byte, error) {
         return false, nil, NewError(err, this)
     }
 
-    var key ecdsa.PublicKey
+    var key SigningKey
     _, err = asn1.Unmarshal(rawKey, &key)
     if err != nil {
         return false, nil, NewError(err, this)
     }
+    var ecdsaKey = ecdsa.PublicKey{elliptic.P521(), key.X, key.Y}
 
     var sig Signature
     remaining, err := asn1.Unmarshal(raw, &sig)
@@ -314,7 +337,7 @@ func (this *User) Verify(signed string) (bool, []byte, error) {
     }
 
     hash := sha512.Sum512(remaining)
-    return ecdsa.Verify(&key, hash[:], sig.R, sig.S), remaining, nil
+    return ecdsa.Verify(&ecdsaKey, hash[:], sig.R, sig.S), remaining, nil
 }
 
 // Sign encodes the provided data and adds a signature generated from the user's private signing key.

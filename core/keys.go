@@ -14,6 +14,12 @@ type Signature struct {
     S   *big.Int
 }
 
+// The SigningKey structure represents an ECDSA key without the curve info.
+type SigningKey struct {
+    X   *big.Int
+    Y   *big.Int
+}
+
 // The Keys structure holds the private cryptographic and signing keys of a user.
 type Keys struct {
     // The CryptoKey field is the private symmetric encryption key for the user's own data.
@@ -25,6 +31,11 @@ type Keys struct {
 // PublicSigningKey provides access to the user's public ECDSA key.
 func (this *Keys) PublicSigningKey() *ecdsa.PublicKey {
     return &this.SigningKey.PublicKey
+}
+
+// PublicSigningKey provides access to the user's public ECDSA key.
+func (this *Keys) PublicSigningKeyNoCurve() *SigningKey {
+    return &SigningKey{this.SigningKey.PublicKey.X, this.SigningKey.PublicKey.Y}
 }
 
 // MakeKeys takes the password salts from the user as well as the user's password, and generates the corresponding set of private keys.
