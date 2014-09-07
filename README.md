@@ -2,6 +2,8 @@
 
 *A multi-user password repository.*
 
+[![Build Status](https://travis-ci.org/awm/passrep.svg?branch=master)](https://travis-ci.org/awm/passrep)
+
 ## Introduction ##
 
 The goal of this project is to produce a password storage application along the lines of [KeePass][] or [KeePassX][] which is both cross-platform and allows access control different users can have different permission levels on password entries.  One potential use case is a small corporate IT department where the primary IT staff have access to everything, but the sales and marketing department is delegated access to the credentials for the public website, etc. so that they can make updates to the content.
