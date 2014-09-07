@@ -25,6 +25,8 @@ func NewError(content interface{}, user ...interface{}) *Error {
     }
 
     switch c := content.(type) {
+    case *Error:
+        err.Msg = c.Msg
     case error:
         err.Msg = c.Error()
     case string:

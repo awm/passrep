@@ -13,10 +13,12 @@ type KeysTestSuite struct {
 }
 
 func (suite *KeysTestSuite) TestCreation() {
+    a := assert.New(suite.T())
+
     u := User{Name: "test.user", CryptoSalt: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", SigningSalt: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}
     k, err := MakeKeys(&u, "password")
-    assert.NoError(suite.T(), err, "Key generation failed")
-    assert.NotNil(suite.T(), k, "Nil keys")
+    a.NoError(err, "Key generation failed")
+    a.NotNil(k, "Nil keys")
 
     cryptoKey := []byte{
         0x92, 0x99, 0xE5, 0xD9, 0x06, 0x87, 0x46, 0xCB,
@@ -24,7 +26,7 @@ func (suite *KeysTestSuite) TestCreation() {
         0x7A, 0xA1, 0xD9, 0x05, 0xE1, 0x2F, 0x75, 0x3F,
         0x49, 0xD9, 0x08, 0x5A, 0xE6, 0x26, 0xAB, 0xA0,
     }
-    assert.Exactly(suite.T(), k.CryptoKey, cryptoKey, "Cryptographic key does not match")
+    a.Exactly(k.CryptoKey, cryptoKey, "Cryptographic key does not match")
 
     signingKeyBytes := []byte{
         0x01, 0x68, 0x18, 0x80, 0xEA, 0x2B, 0x6E, 0x5E,
@@ -39,8 +41,11 @@ func (suite *KeysTestSuite) TestCreation() {
     }
     signingKey := new(big.Int).SetBytes(signingKeyBytes)
     p := k.PublicSigningKey()
-    assert.Exactly(suite.T(), p.Curve, elliptic.P521(), "Signing key elliptic curve differs")
-    assert.Exactly(suite.T(), k.SigningKey.D, signingKey, "Signing key does not match")
+    a.Exactly(p.Curve, elliptic.P521(), "Signing key elliptic curve differs")
+    nc := k.PublicSigningKeyNoCurve()
+    a.Equal(p.X, nc.X, "Mismatch between public key representations (X)")
+    a.Equal(p.Y, nc.Y, "Mismatch between public key representations (Y)")
+    a.Exactly(k.SigningKey.D, signingKey, "Signing key does not match")
 }
 
 func TestKeysTestSuite(t *testing.T) {

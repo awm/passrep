@@ -9,7 +9,6 @@ import (
     "crypto/sha512"
     "encoding/asn1"
     "encoding/base64"
-    "errors"
     "github.com/awm/passrep/utils"
     "math/big"
     "strings"
@@ -67,9 +66,9 @@ func NewUser(name string, password string) (*User, error) {
     }
     user.keys = keys
 
-    err = user.updatePublicKey()
-    if err != nil {
-        return nil, NewError(err)
+    e := user.updatePublicKey()
+    if e != nil {
+        return nil, NewError(e)
     }
 
     DB.Create(user)
@@ -85,14 +84,19 @@ func LoadUser(name string) (*User, error) {
     return user, nil
 }
 
+// Drop removes the user from the database, but does not delete the corresponding Go structure.
+func (this *User) Drop() {
+    DB.Delete(this)
+}
+
 // The updatePublicKey function encodes the public key stored in the keys member and populates the PublicKey member with it.
-func (this *User) updatePublicKey() error {
+func (this *User) updatePublicKey() *Error {
     if this.keys == nil {
-        return errors.New("Keys not available")
+        return NewError("Keys not available", this)
     } else {
         raw, err := asn1.Marshal(*this.keys.PublicSigningKeyNoCurve())
         if err != nil {
-            return err
+            return NewError(err, this)
         }
 
         this.PublicKey = base64.StdEncoding.EncodeToString(raw)
